@@ -1,18 +1,19 @@
 {
-  "fingerprint": "303aa275e58c6dd9",
+  "fingerprint": "90daf859012311db",
   "enrichment": {
     "project": {
-      "key_breakthrough": "Bubble count error dropped from 100% to 4% by fixing max_det=300 and conf threshold sweeping across 268 warm-started epochs.",
+      "key_breakthrough": "diameter MAPE improved from 9% to 2.16% by switching to detection + blended circle formula (min(w,h)+sqrt(w*h))/2.",
       "lessons_learned": [
-        "max_det=300 (YOLO default) is a hard ceiling when teacher finds 433 bubbles/image — must raise to 1000.",
-        "Optimal conf threshold is 0.15 not 0.05: sweeping across values cut MAE from 115 to 15.7 at same checkpoint.",
-        "Warm-starting from prior checkpoints is highly effective — each run adds epochs without repeating pseudolabeling."
+        "Blended radius formula outperforms either min(w,h)/2 or sqrt(w*h)/2 alone — 2.16% vs 3.88% MAPE.",
+        "Expanding to no-catheter data (large 2-2.5um bubbles) was essential — model failed on unseen bubble sizes.",
+        "Detection + post-processing beats segmentation: avoids rectangular mask artifacts entirely."
       ],
       "dead_ends": [
-        "val=True during training on MPS triggers a shape-mismatch crash in the YOLO11 assigner; use val=False.",
-        "conf=0.05 looked reasonable but caused 3x worse MAE than conf=0.15 on the same trained model."
+        "YOLO segmentation masks — upsampled to 160x160 prototypes, inherently rectangular for circular objects.",
+        "sqrt(w*h)/2 alone overestimates ring-shaped large bubbles by ~20%.",
+        "min(w,h)/2 alone underestimates small bubbles — bias swings the wrong way."
       ],
-      "trajectory": "Started at MAE=432 (0 detections). Fixed max_det + 169 epochs -> MAE=31. Further 99 epochs + conf sweep -> MAE=15.7 (4%), below the 5% target."
+      "trajectory": "Started with segmentation at ~9% MAPE. Switched to detection + circle post-processing, expanded data to 30 images, and refined radius formula over 9 runs to reach 2.16% MAPE."
     },
     "runs": {}
   }

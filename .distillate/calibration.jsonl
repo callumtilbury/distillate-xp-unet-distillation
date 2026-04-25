@@ -4,3 +4,6 @@
 {"run_id": "xp-ec927d", "timestamp": "2026-04-25T15:04:03.916660+00:00", "predicted_metric": "count_mae", "predicted_value": 22.0, "actual_value": 15.7, "confidence": 65, "verdict": "confirmed", "prediction_error": 6.3}
 {"run_id": "xp-423801", "timestamp": "2026-04-25T15:19:48.126304+00:00", "predicted_metric": "diameter_mae_um", "predicted_value": 2.0, "actual_value": 0.189, "confidence": 50, "verdict": "confirmed", "prediction_error": 1.811}
 {"run_id": "xp-471b36", "timestamp": "2026-04-25T15:34:39.531771+00:00", "predicted_metric": "diameter_mae_um", "predicted_value": 0.15, "actual_value": 0.1592, "confidence": 55, "verdict": "refuted", "prediction_error": 0.0092}
+{"run_id": "xp-54ef03", "timestamp": "2026-04-25T16:03:55.527112+00:00", "predicted_metric": "diameter_mape", "predicted_value": 5.0, "actual_value": 9.04, "confidence": 65, "verdict": "refuted", "prediction_error": 4.04}
+{"run_id": "xp-e1fd42", "timestamp": "2026-04-25T16:21:09.453126+00:00", "predicted_metric": "diameter_mape", "predicted_value": 5.0, "actual_value": 3.88, "confidence": 65, "verdict": "confirmed", "prediction_error": 1.12}
+{"run_id": "xp-78acf0", "timestamp": "2026-04-25T16:35:28.991343+00:00", "predicted_metric": "diameter_mape", "predicted_value": 2.5, "actual_value": 2.16, "confidence": 60, "verdict": "confirmed", "prediction_error": 0.34}

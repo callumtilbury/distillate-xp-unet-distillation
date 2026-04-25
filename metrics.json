@@ -1,11 +1,12 @@
 {
-  "diameter_mae_um": 0.1592,
-  "count_mae": 24.6,
-  "count_pct_diff": 5.3,
-  "student_mean_diam_um": 1.1314,
-  "teacher_mean_diam_um": 1.1718,
-  "best_conf_threshold": 0.15,
-  "max_det": 1000,
-  "model": "yolo11n-det",
-  "epochs_run": 247
+  "diameter_mae_um": 0.5402,
+  "diameter_mape": 2.16,
+  "count_mae": 16.4,
+  "count_pct_diff": 7.4,
+  "student_mean_diam_um": 1.6684,
+  "teacher_mean_diam_um": 1.6555,
+  "best_conf_threshold": 0.4,
+  "radius_formula": "(min(w,h) + sqrt(w*h)) / 2",
+  "epochs_run": 164,
+  "n_train_images": 24
 }

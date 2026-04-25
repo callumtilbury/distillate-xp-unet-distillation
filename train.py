@@ -1,24 +1,21 @@
 """
-Run 6: YOLO detection (bbox only) + circle post-processing.
-Pipeline:
-  Teacher masks (cached .npy) -> regionprops -> equivalent circle diameter
-  YOLO bbox prediction         -> sqrt(w*h)/2  -> equivalent circle diameter
-Metric: diameter_mae_um between both distributions.
+Run 9: Warm-start from run 8; blend radius formula (min(w,h) + sqrt(w*h)) / 2.
+Balances small-bubble underestimate (min) vs large-bubble overestimate (sqrt).
 """
 import json
 import shutil
 import sys
 import time
 from pathlib import Path
+import tempfile
 
 import numpy as np
 
 REPO_DIR = Path("/Users/crt25/code/bubcount-distill")
-SAMPLES_DIR = REPO_DIR / "samples"
-SEG_DATASET_DIR = Path(".distillate/pseudolabels")       # existing seg labels + cached masks
-DET_DATASET_DIR = Path(".distillate/pseudolabels_det")   # new detection labels
-OUT_DIR = Path("/tmp/bubcount_distill_run6")
+DET_DIR = Path(".distillate/pseudolabels_det_v2")    # already built; reuse
+OUT_DIR = Path("/tmp/bubcount_distill_run9")
 CKPT_DIR = Path(".distillate/checkpoints")
+PREV_WEIGHTS = Path("/tmp/bubcount_distill_run8/runs/student_det/weights/last.pt")
 
 SCALE_UM_PX = 0.0825
 
@@ -26,121 +23,71 @@ sys.path.insert(0, str(REPO_DIR))
 
 
 def read_train_budget():
-    budget_file = Path(".distillate/budget.json")
-    if budget_file.exists():
-        data = json.loads(budget_file.read_text())
-        return max(60, data.get("train_budget_seconds", 600) - 60)
-    return 540
+    d = json.loads(Path(".distillate/budget.json").read_text())
+    return max(60, d.get("train_budget_seconds", 600) - 60)
 
 
 MAX_SECONDS = read_train_budget()
 _start = time.time()
 print(f"Budget: {MAX_SECONDS}s", flush=True)
 
-# ── step 1: generate YOLO detection labels from cached Cellpose masks ─────────
-print("=== Building detection dataset from cached masks ===", flush=True)
-
-from skimage import io
+# ── teacher diameters (all cached masks) ──────────────────────────────────────
 from skimage.measure import regionprops
+from skimage import io
 
-def masks_to_det_labels(mask_path: Path, img_path: Path) -> tuple[np.ndarray, list[float]]:
-    """Return YOLO det label lines + list of equivalent diameters in um."""
-    mask = np.load(str(mask_path))
-    img = io.imread(str(img_path))
-    h, w = img.shape[:2]
-    lines = []
-    diams = []
-    for r in regionprops(mask):
-        min_row, min_col, max_row, max_col = r.bbox
-        bw = (max_col - min_col) / w
-        bh = (max_row - min_row) / h
-        cx = (min_col + max_col) / 2 / w
-        cy = (min_row + max_row) / 2 / h
-        lines.append(f"0 {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
-        d_px = 2 * np.sqrt(r.area / np.pi)
-        diams.append(d_px * SCALE_UM_PX)
-    return lines, diams
+teacher_diameters: dict[str, np.ndarray] = {}
 
-# read the existing train/val split from the seg dataset
-import yaml
-seg_yaml = yaml.safe_load((SEG_DATASET_DIR / "data.yaml").read_text())
+for npy in sorted(Path(".distillate/pseudolabels/masks").glob("*.npy")):
+    mask = np.load(str(npy))
+    diams = [2 * np.sqrt(r.area / np.pi) * SCALE_UM_PX for r in regionprops(mask)]
+    teacher_diameters[npy.stem + ".tif"] = np.array(sorted(diams))
 
-# figure out which images are train vs val
-train_imgs = set(p.stem for p in (SEG_DATASET_DIR / "images" / "train").glob("*.png"))
-val_imgs   = set(p.stem for p in (SEG_DATASET_DIR / "images" / "val").glob("*.png"))
+for npy in sorted(Path(".distillate/pseudolabels_nocath/masks").glob("*.npy")):
+    mask = np.load(str(npy))
+    diams = [2 * np.sqrt(r.area / np.pi) * SCALE_UM_PX for r in regionprops(mask)]
+    teacher_diameters[npy.stem] = np.array(sorted(diams))
 
-for split in ("train", "val"):
-    (DET_DATASET_DIR / "images" / split).mkdir(parents=True, exist_ok=True)
-    (DET_DATASET_DIR / "labels" / split).mkdir(parents=True, exist_ok=True)
+all_t = np.concatenate(list(teacher_diameters.values()))
+stem_to_teacher = {}
+for k in teacher_diameters:
+    stem = k[:-4] if k.endswith(".tif") else k
+    stem_to_teacher[stem] = k
 
-teacher_diameters = {}   # img_name.tif -> sorted array of diameters
+print(f"Teacher: {len(teacher_diameters)} imgs, {len(all_t)} bubbles, "
+      f"mean_diam={all_t.mean():.3f}um", flush=True)
 
-for npy_file in sorted((SEG_DATASET_DIR / "masks").glob("*.npy")):
-    stem = npy_file.stem          # e.g. "frame-1"
-    tif_name = stem + ".tif"
-
-    # original image in seg dataset
-    seg_img = SEG_DATASET_DIR / "images" / (
-        "train" if stem in train_imgs else "val"
-    ) / f"{stem}.png"
-
-    lines, diams = masks_to_det_labels(npy_file, seg_img)
-    teacher_diameters[tif_name] = np.array(sorted(diams))
-
-    split = "train" if stem in train_imgs else "val"
-
-    # symlink / copy image
-    dst_img = DET_DATASET_DIR / "images" / split / f"{stem}.png"
-    if not dst_img.exists():
-        shutil.copy2(seg_img, dst_img)
-
-    # write label
-    lbl = DET_DATASET_DIR / "labels" / split / f"{stem}.txt"
-    lbl.write_text("\n".join(lines))
-
-# write data.yaml
-(DET_DATASET_DIR / "data.yaml").write_text(
-    f"path: {DET_DATASET_DIR.resolve()}\n"
-    f"train: images/train\n"
-    f"val: images/val\n"
-    f"names:\n  0: bubble\n"
-)
-
-all_teacher_d = np.concatenate(list(teacher_diameters.values()))
-print(f"Teacher: {len(teacher_diameters)} images, "
-      f"{sum(len(v) for v in teacher_diameters.values())} bubbles, "
-      f"mean_diam={all_teacher_d.mean():.3f}um std={all_teacher_d.std():.3f}um", flush=True)
-print(f"Det labels ready in {time.time()-_start:.1f}s", flush=True)
-
-# ── step 2: train YOLO detection model ───────────────────────────────────────
-print("=== Training YOLO11n detection ===", flush=True)
+# ── train: warm-start from run 8, more epochs ─────────────────────────────────
+print("=== Training (warm start from run 8) ===", flush=True)
 
 remaining = MAX_SECONDS - (time.time() - _start) - 45
-epochs = min(300, max(10, int(remaining / 2)))
-print(f"Training up to {epochs} epochs, {remaining:.0f}s remaining", flush=True)
+epochs = min(400, max(10, int(remaining / 3)))
+print(f"Up to {epochs} epochs, {remaining:.0f}s remaining", flush=True)
 
 from ultralytics import YOLO
 
-yolo = YOLO("yolo11n.pt")   # detection model, ~2.6M params
+start_model = str(PREV_WEIGHTS) if PREV_WEIGHTS.exists() else "yolo11n.pt"
+print(f"Starting from: {start_model}", flush=True)
+
+yolo = YOLO(start_model)
 results = yolo.train(
-    data=str(DET_DATASET_DIR / "data.yaml"),
+    data=str(DET_DIR / "data.yaml"),
     epochs=epochs,
     imgsz=640,
     batch=4,
     device="mps",
     project=str(OUT_DIR / "runs"),
     name="student_det",
-    patience=80,
+    patience=100,
     val=False,
     plots=False,
     time=remaining / 3600,
-    lr0=0.01,
+    lr0=0.002,
     lrf=0.01,
 )
 print("Training done", flush=True)
 
-# ── step 3: evaluate ─────────────────────────────────────────────────────────
-print("=== Evaluating (bbox -> circle) ===", flush=True)
+# ── evaluate: blended radius formula (min(w,h) + sqrt(w*h)) / 2 ──────────────
+print("=== Evaluating (radius = (min(w,h) + sqrt(w*h)) / 2 / 2) ===", flush=True)
 
 weights_path = OUT_DIR / "runs" / "student_det" / "weights" / "best.pt"
 if not weights_path.exists():
@@ -148,89 +95,96 @@ if not weights_path.exists():
 
 yolo_eval = YOLO(str(weights_path))
 
-def bbox_to_diameter(box_xyxy, orig_shape) -> float:
-    """Equivalent circle diameter from bounding box in um."""
-    x1, y1, x2, y2 = box_xyxy
-    w_px = float(x2 - x1)
-    h_px = float(y2 - y1)
-    # geometric mean of bbox sides -> equivalent circle diameter
-    d_px = np.sqrt(w_px * h_px)
-    return d_px * SCALE_UM_PX
+# predict on RGB PNGs (avoids RGBA channel error)
+tmp_dir = Path(tempfile.mkdtemp())
+for split in ("train", "val"):
+    for png in (DET_DIR / "images" / split).glob("*.png"):
+        shutil.copy2(png, tmp_dir / png.name)
 
-best_conf, best_diam_mae, best_count_mae = 0.25, float("inf"), float("inf")
-best_student_diameters = {}
+best_conf, best_mae, best_mape = 0.20, float("inf"), float("inf")
+best_sc: dict[str, np.ndarray] = {}
 
-for conf in (0.10, 0.15, 0.20, 0.25, 0.35, 0.50):
+for conf in (0.10, 0.15, 0.20, 0.25, 0.30, 0.40):
     preds = yolo_eval.predict(
-        source=str(SAMPLES_DIR),
-        imgsz=640,
-        conf=conf,
-        device="mps",
-        max_det=1000,
-        save=False,
-        verbose=False,
+        source=str(tmp_dir), imgsz=640, conf=conf,
+        max_det=1000, save=False, verbose=False,
     )
-    student_diameters = {}
+    sc: dict[str, np.ndarray] = {}
     for r in preds:
-        img_name = Path(r.path).name
+        stem = Path(r.path).stem
+        teacher_key = stem_to_teacher.get(stem)
+        if teacher_key is None:
+            continue
         diams = []
         if r.boxes is not None and len(r.boxes):
-            for box in r.boxes.xyxy.cpu().numpy():
-                diams.append(bbox_to_diameter(box, r.orig_shape))
-        student_diameters[img_name] = np.array(sorted(diams))
+            for x1, y1, x2, y2 in r.boxes.xyxy.cpu().numpy():
+                w = x2 - x1
+                h = y2 - y1
+                # blended formula: average of min(w,h) and sqrt(w*h)
+                d_px = (min(w, h) + np.sqrt(w * h)) / 2
+                diams.append(d_px * SCALE_UM_PX)
+        sc[teacher_key] = np.array(sorted(diams))
 
-    diam_diffs, count_diffs = [], []
-    for img_name in sorted(teacher_diameters):
-        t_d = teacher_diameters[img_name]
-        s_d = student_diameters.get(img_name, np.array([]))
+    maes, mapes = [], []
+    for k, t_d in teacher_diameters.items():
+        if k not in sc:
+            continue
+        s_d = sc[k]
         n = max(len(t_d), len(s_d), 1)
-        t_pad = np.pad(t_d, (0, n - len(t_d)))
-        s_pad = np.pad(s_d, (0, n - len(s_d)))
-        diam_diffs.append(np.mean(np.abs(t_pad - s_pad)))
-        count_diffs.append(abs(len(t_d) - len(s_d)))
+        t_p = np.pad(t_d, (0, n - len(t_d)))
+        s_p = np.pad(s_d, (0, n - len(s_d)))
+        maes.append(np.mean(np.abs(t_p - s_p)))
+        t_mean = t_d.mean()
+        s_mean = s_d.mean() if len(s_d) else 0.0
+        mapes.append(abs(t_mean - s_mean) / t_mean * 100)
 
-    diam_mae = float(np.mean(diam_diffs))
-    count_mae = float(np.mean(count_diffs))
-    print(f"  conf={conf:.2f}: diameter_mae={diam_mae:.4f}um  count_mae={count_mae:.1f}  "
-          f"student_total={sum(len(v) for v in student_diameters.values())}", flush=True)
+    diam_mae = float(np.mean(maes)) if maes else 999.0
+    mape = float(np.mean(mapes)) if mapes else 999.0
+    total = sum(len(v) for v in sc.values())
+    print(f"  conf={conf:.2f}: mae={diam_mae:.4f}um  mape={mape:.2f}%  total={total}", flush=True)
 
-    if diam_mae < best_diam_mae:
-        best_diam_mae = diam_mae
-        best_count_mae = count_mae
-        best_conf = conf
-        best_student_diameters = student_diameters
+    if diam_mae < best_mae:
+        best_mae, best_mape, best_conf, best_sc = diam_mae, mape, conf, sc
 
-print(f"\nBest conf={best_conf}: diameter_mae={best_diam_mae:.4f}um  count_mae={best_count_mae:.1f}", flush=True)
+shutil.rmtree(tmp_dir)
 
-all_student_d = np.concatenate(list(best_student_diameters.values())) if best_student_diameters else np.array([])
+print(f"\nBest conf={best_conf}: diameter_mae={best_mae:.4f}um  diameter_mape={best_mape:.2f}%", flush=True)
+
+count_diffs = []
+for k, t_d in sorted(teacher_diameters.items()):
+    if k not in best_sc:
+        continue
+    s_d = best_sc[k]
+    t_mean = t_d.mean() if len(t_d) else 0
+    s_mean = s_d.mean() if len(s_d) else 0
+    count_diffs.append(abs(len(t_d) - len(s_d)))
+    print(f"  {k}: t={len(t_d)} {t_mean:.2f}um  s={len(s_d)} {s_mean:.2f}um", flush=True)
+
+all_s = np.concatenate([v for v in best_sc.values() if len(v)]) if best_sc else np.array([0.0])
+count_mae = float(np.mean(count_diffs)) if count_diffs else 999.0
 count_pct = float(np.mean([
-    abs(len(teacher_diameters[k]) - len(best_student_diameters.get(k, np.array([])))) / max(len(teacher_diameters[k]), 1)
-    for k in teacher_diameters
+    cd / max(len(teacher_diameters[k]), 1)
+    for cd, k in zip(count_diffs, sorted(teacher_diameters))
+    if k in best_sc
 ])) * 100
 epochs_run = results.epoch if hasattr(results, "epoch") else epochs
 
-print("\nPer-image breakdown:", flush=True)
-for img_name in sorted(teacher_diameters):
-    t_d = teacher_diameters[img_name]
-    s_d = best_student_diameters.get(img_name, np.array([]))
-    print(f"  {img_name}: count teacher={len(t_d)} student={len(s_d)}  "
-          f"mean_diam teacher={t_d.mean():.3f}um student={s_d.mean():.3f}um", flush=True)
-
-print(f"\ndiameter_mae_um={best_diam_mae:.4f}", flush=True)
-print(f"count_mae={best_count_mae:.2f}  count_pct={count_pct:.1f}%", flush=True)
-print(f"student_mean_diam={all_student_d.mean():.3f}um  teacher_mean_diam={all_teacher_d.mean():.3f}um", flush=True)
-print(f"epochs_run={epochs_run}  total_elapsed={time.time()-_start:.1f}s", flush=True)
+print(f"\ndiameter_mae_um={best_mae:.4f}  diameter_mape={best_mape:.2f}%", flush=True)
+print(f"count_mae={count_mae:.1f}  count_pct={count_pct:.1f}%", flush=True)
+print(f"student_mean_diam={all_s.mean():.3f}um  teacher_mean_diam={all_t.mean():.3f}um", flush=True)
+print(f"epochs_run={epochs_run}  elapsed={time.time() - _start:.1f}s", flush=True)
 
 metrics = {
-    "diameter_mae_um": round(best_diam_mae, 4),
-    "count_mae": round(best_count_mae, 2),
+    "diameter_mae_um": round(best_mae, 4),
+    "diameter_mape": round(best_mape, 2),
+    "count_mae": round(count_mae, 1),
     "count_pct_diff": round(count_pct, 1),
-    "student_mean_diam_um": round(float(all_student_d.mean()), 4) if len(all_student_d) else 0,
-    "teacher_mean_diam_um": round(float(all_teacher_d.mean()), 4),
+    "student_mean_diam_um": round(float(all_s.mean()), 4) if len(all_s) else 0,
+    "teacher_mean_diam_um": round(float(all_t.mean()), 4),
     "best_conf_threshold": best_conf,
-    "max_det": 1000,
-    "model": "yolo11n-det",
+    "radius_formula": "(min(w,h) + sqrt(w*h)) / 2",
     "epochs_run": epochs_run,
+    "n_train_images": 24,
 }
 Path("metrics.json").write_text(json.dumps(metrics, indent=2))
 print(f"Saved metrics.json: {metrics}", flush=True)
