@@ -3,3 +3,4 @@
 {"run_id": "xp-5258d5", "timestamp": "2026-04-25T14:53:55.809607+00:00", "predicted_metric": "count_mae", "predicted_value": 150.0, "actual_value": 31.1, "confidence": 60, "verdict": "confirmed", "prediction_error": 118.9}
 {"run_id": "xp-ec927d", "timestamp": "2026-04-25T15:04:03.916660+00:00", "predicted_metric": "count_mae", "predicted_value": 22.0, "actual_value": 15.7, "confidence": 65, "verdict": "confirmed", "prediction_error": 6.3}
 {"run_id": "xp-423801", "timestamp": "2026-04-25T15:19:48.126304+00:00", "predicted_metric": "diameter_mae_um", "predicted_value": 2.0, "actual_value": 0.189, "confidence": 50, "verdict": "confirmed", "prediction_error": 1.811}
+{"run_id": "xp-471b36", "timestamp": "2026-04-25T15:34:39.531771+00:00", "predicted_metric": "diameter_mae_um", "predicted_value": 0.15, "actual_value": 0.1592, "confidence": 55, "verdict": "refuted", "prediction_error": 0.0092}
