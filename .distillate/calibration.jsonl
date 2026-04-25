@@ -1,0 +1,1 @@
+{"run_id": "xp-b049bc", "timestamp": "2026-04-25T14:34:17.159484+00:00", "predicted_metric": "count_mae", "predicted_value": 5.0, "actual_value": 432.9, "confidence": 50, "verdict": "refuted", "prediction_error": 427.9}

@@ -1,0 +1,7 @@
+{
+  "run_budget_seconds": 600,
+  "train_budget_seconds": 600,
+  "wrap_budget_seconds": 60,
+  "session_budget_seconds": null,
+  "session_started_at": "2026-04-25T14:23:28.633398+00:00"
+}
