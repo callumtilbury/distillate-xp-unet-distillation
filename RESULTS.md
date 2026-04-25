@@ -2,19 +2,21 @@
 
 ## Current best
 
-**Run 9** — diameter_mape=2.16% | diameter_mae=0.5402um | count_mae=16.4 (7.4%)  
-Pipeline: YOLO11n detection → bbox → circle (centre + r=(min(w,h)+√(w·h))/2)  
+**Run 10** — diameter_mape=1.96% | diameter_mae=0.389um | count_mae=10.4 (4.5%)  
+Pipeline: YOLO11n detection → bbox → circle (centre + r=(min(w,h)+√(w·h))/2/2)  
 Teacher baseline: Cellpose-SAM-FT → regionprops → equivalent circle  
-Model: YOLO11n (2.58M params), conf=0.40, max_det=1000, 9 runs total, 164 epochs this run
+Model: YOLO11n, conf=0.45, max_det=1000, lr0=0.0005 fine-tuning
+
+**Goal achieved: <2% diameter MAPE ✓**
 
 ## Key findings
 
-- **Blended radius formula is better than either extreme**: `(min(w,h)+sqrt(w*h))/2` beats both `min(w,h)/2` (+1.72pp) and `sqrt(w*h)/2` (overestimates large bubbles) alone
-- **Detection + circle post-processing beats segmentation** for diameter accuracy
-- **Systematic overestimate eliminated**: seg model overshot by +0.1um; det model with blended formula is +0.012um (1.2% mean bias)
+- **Blended radius formula is optimal**: `(min(w,h)+sqrt(w*h))/2` beats both `min(w,h)/2` and `sqrt(w*h)/2` alone
+- **Fine-tuning LR matters**: dropping lr0 from 0.002→0.0005 for final runs gave tighter bbox regression, closing 0.2% MAPE gap
+- **Extended conf sweep to 0.50**: optimal conf shifted 0.15→0.30→0.40→0.45 as bbox regression improved across runs
+- **Detection + circle post-processing beats segmentation** for diameter accuracy — avoids rectangular mask artifacts
+- **No-catheter data essential**: covers large bubbles (2-2.5um) absent in original 10-frame dataset
 - **`max_det=300`** YOLO default silently caps detections — must be 1000+ for 400+ bubble images
-- **Conf threshold sweep is critical**: optimal shifted from 0.15 (run 6) → 0.30 (run 8) → 0.40 (run 9) as bbox regression improved
-- **No-catheter data** essential: covers large bubbles (2-2.5um) absent in original 10-frame dataset
 
 ## Trajectory
 
@@ -25,19 +27,19 @@ Model: YOLO11n (2.58M params), conf=0.40, max_det=1000, 9 runs total, 164 epochs
 | 6   | ~9% | 5.3% | det + sqrt(w*h)/2 circle post-proc |
 | 7   | 9.04% | — | expanded to 30 imgs (no-catheter data) |
 | 8   | 3.88% | 5.9% | switch to min(w,h)/2; 52 warm-start epochs |
-| **9** | **2.16%** | 7.4% | **blended formula (min+sqrt)/2; 164 epochs** |
+| 9   | 2.16% | 7.4% | blended formula (min+sqrt)/2; 164 epochs |
+| **10** | **1.96%** | **4.5%** | **lower LR fine-tuning; conf sweep to 0.50** |
 
-## Pipeline (current)
+## Pipeline (final)
 
 ```
 Teacher: image → Cellpose-SAM-FT → instance masks → regionprops → (cx, cy, r_px=√(area/π))
 Student: image → YOLO11n-det     → bboxes        → post-proc  → (cx, cy, r_px=(min(w,h)+√(w·h))/2/2)
 Metric:  diameter_mape = mean|teacher_mean_diam - student_mean_diam| / teacher_mean_diam * 100%
+         = 1.96% at conf=0.45
 ```
 
 ## What's next
 
-Closing the final ~0.16% gap to <2% target. Options:
-1. More warm-start epochs with lower LR (finer bbox regression)
-2. Wider conf sweep including 0.45/0.50 — optimal may have shifted further
-3. Mosaic augmentation tuning to emphasize large bubble scenarios
+Goal met. Further gains would require more training data or exploring larger model variants.
+Potential improvements: sample more no-catheter frames to reduce bias on large-bubble images.

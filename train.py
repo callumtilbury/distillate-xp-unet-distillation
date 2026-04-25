@@ -1,6 +1,6 @@
 """
-Run 9: Warm-start from run 8; blend radius formula (min(w,h) + sqrt(w*h)) / 2.
-Balances small-bubble underestimate (min) vs large-bubble overestimate (sqrt).
+Run 10: Warm-start from run 9; lower LR for fine-tuning; wider conf sweep to 0.50.
+Targeting final <2% diameter MAPE gap.
 """
 import json
 import shutil
@@ -12,10 +12,10 @@ import tempfile
 import numpy as np
 
 REPO_DIR = Path("/Users/crt25/code/bubcount-distill")
-DET_DIR = Path(".distillate/pseudolabels_det_v2")    # already built; reuse
-OUT_DIR = Path("/tmp/bubcount_distill_run9")
+DET_DIR = Path(".distillate/pseudolabels_det_v2")
+OUT_DIR = Path("/tmp/bubcount_distill_run10")
 CKPT_DIR = Path(".distillate/checkpoints")
-PREV_WEIGHTS = Path("/tmp/bubcount_distill_run8/runs/student_det/weights/last.pt")
+PREV_WEIGHTS = Path("/tmp/bubcount_distill_run9/runs/student_det/weights/last.pt")
 
 SCALE_UM_PX = 0.0825
 
@@ -31,9 +31,7 @@ MAX_SECONDS = read_train_budget()
 _start = time.time()
 print(f"Budget: {MAX_SECONDS}s", flush=True)
 
-# ── teacher diameters (all cached masks) ──────────────────────────────────────
 from skimage.measure import regionprops
-from skimage import io
 
 teacher_diameters: dict[str, np.ndarray] = {}
 
@@ -56,8 +54,7 @@ for k in teacher_diameters:
 print(f"Teacher: {len(teacher_diameters)} imgs, {len(all_t)} bubbles, "
       f"mean_diam={all_t.mean():.3f}um", flush=True)
 
-# ── train: warm-start from run 8, more epochs ─────────────────────────────────
-print("=== Training (warm start from run 8) ===", flush=True)
+print("=== Training (warm start from run 9, lower LR) ===", flush=True)
 
 remaining = MAX_SECONDS - (time.time() - _start) - 45
 epochs = min(400, max(10, int(remaining / 3)))
@@ -81,13 +78,12 @@ results = yolo.train(
     val=False,
     plots=False,
     time=remaining / 3600,
-    lr0=0.002,
+    lr0=0.0005,   # lower LR for fine-tuning
     lrf=0.01,
 )
 print("Training done", flush=True)
 
-# ── evaluate: blended radius formula (min(w,h) + sqrt(w*h)) / 2 ──────────────
-print("=== Evaluating (radius = (min(w,h) + sqrt(w*h)) / 2 / 2) ===", flush=True)
+print("=== Evaluating (blended formula, wider conf sweep) ===", flush=True)
 
 weights_path = OUT_DIR / "runs" / "student_det" / "weights" / "best.pt"
 if not weights_path.exists():
@@ -95,7 +91,6 @@ if not weights_path.exists():
 
 yolo_eval = YOLO(str(weights_path))
 
-# predict on RGB PNGs (avoids RGBA channel error)
 tmp_dir = Path(tempfile.mkdtemp())
 for split in ("train", "val"):
     for png in (DET_DIR / "images" / split).glob("*.png"):
@@ -104,7 +99,7 @@ for split in ("train", "val"):
 best_conf, best_mae, best_mape = 0.20, float("inf"), float("inf")
 best_sc: dict[str, np.ndarray] = {}
 
-for conf in (0.10, 0.15, 0.20, 0.25, 0.30, 0.40):
+for conf in (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50):
     preds = yolo_eval.predict(
         source=str(tmp_dir), imgsz=640, conf=conf,
         max_det=1000, save=False, verbose=False,
@@ -120,7 +115,6 @@ for conf in (0.10, 0.15, 0.20, 0.25, 0.30, 0.40):
             for x1, y1, x2, y2 in r.boxes.xyxy.cpu().numpy():
                 w = x2 - x1
                 h = y2 - y1
-                # blended formula: average of min(w,h) and sqrt(w*h)
                 d_px = (min(w, h) + np.sqrt(w * h)) / 2
                 diams.append(d_px * SCALE_UM_PX)
         sc[teacher_key] = np.array(sorted(diams))

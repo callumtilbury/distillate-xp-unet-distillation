@@ -1,11 +1,11 @@
 {
-  "diameter_mae_um": 0.5402,
-  "diameter_mape": 2.16,
-  "count_mae": 16.4,
-  "count_pct_diff": 7.4,
-  "student_mean_diam_um": 1.6684,
+  "diameter_mae_um": 0.389,
+  "diameter_mape": 1.96,
+  "count_mae": 10.4,
+  "count_pct_diff": 4.5,
+  "student_mean_diam_um": 1.6879,
   "teacher_mean_diam_um": 1.6555,
-  "best_conf_threshold": 0.4,
+  "best_conf_threshold": 0.45,
   "radius_formula": "(min(w,h) + sqrt(w*h)) / 2",
   "epochs_run": 164,
   "n_train_images": 24
