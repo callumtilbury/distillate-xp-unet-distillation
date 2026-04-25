@@ -2,27 +2,29 @@
 
 ## Current best
 
-**Run 4** — count_mae=15.7 (**4.0% per-image error** vs teacher) ✓ goal achieved (<5%)  
-Student: 4635 total detections vs teacher: 4329 | best conf=0.15, max_det=1000  
-Model: YOLO11n-seg (2.83M params), 268 total training epochs
+**Run 5** — diameter_mae=0.189um | count_mae=16.3 (4.0% error)  
+Student: mean_diam=1.27um vs teacher: 1.17um | conf=0.25, max_det=1000, retina_masks=True  
+Model: YOLO11n-seg (2.83M params), ~367 total training epochs
 
 ## Key findings
 
-- **max_det=300** (YOLO default) is a fatal ceiling: teacher averages 433 bubbles/image. Must raise to ≥1000.
-- **Conf threshold matters enormously**: same checkpoint gives MAE=115 at conf=0.05 but MAE=15.7 at conf=0.15. Always sweep.
-- **Warm-starting** across runs is highly efficient — avoids 60s pseudolabeling cost each run, compounds epochs cheaply.
-- **Pseudolabels** from Cellpose-SAM-FT are high quality: 4329 instances across 10 images (~433/image).
-- MPS has a YOLO11 inline-validation shape-mismatch bug; workaround: `val=False` during training, evaluate manually.
+- **`retina_masks=True`** is essential: eliminates rectangular mask artefacts, raises mask mAP50 from 0.168 to 0.252
+- **Count metric was misleading**: count MAE of 15.7 looked good but masks were squares. Diameter MAE is the correct metric.
+- **max_det=300** (YOLO default) silently caps detections below teacher counts — must raise to 1000
+- **Conf threshold=0.25** optimal with retina_masks (not 0.15 from run 4): higher conf filters noisy small-bubble detections
+- **Systematic +0.1um diameter overestimate**: student=1.27um vs teacher=1.17um — likely inflated polygon labels from contour extraction
+- Warm-starting across runs is highly efficient; pseudolabels cached in `.distillate/pseudolabels/`
 
 ## Trajectory
 
-| Run | count_mae | count_pct_diff | Key change |
-|-----|-----------|----------------|-----------|
-| 1   | 432.9     | 100%           | baseline: 18 epochs, no cache |
-| 2   | 315.6     | 72.9%          | cached labels, 71 epochs |
-| 3   | 31.1      | 7.8%           | warm start + max_det=1000 fix |
-| 4   | **15.7**  | **4.0%**       | lower LR + conf sweep (goal ✓) |
+| Run | Primary metric | count_pct | Key change |
+|-----|---------------|-----------|-----------|
+| 1   | count_mae=432.9 | 100% | baseline: 18 epochs, 0 detections |
+| 2   | count_mae=315.6 | 73%  | cached labels, 71 epochs |
+| 3   | count_mae=31.1  | 7.8% | warm start + max_det=1000 |
+| 4   | count_mae=15.7  | 4.0% | conf sweep, goal ✓ |
+| 5   | **diameter_mae=0.189um** | 4.0% | retina_masks=True, circular masks ✓ |
 
 ## What's next
 
-Validate on held-out images to confirm generalisation. Consider higher imgsz (e.g. 1280) for smaller bubbles.
+The student overestimates bubble diameter by ~8% systematically. Fix: tighten pseudolabel polygons (reduce max_contour_points or use tighter contour tolerance) so labels match the actual mask boundary more precisely.

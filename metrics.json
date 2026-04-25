@@ -1,10 +1,11 @@
 {
-  "count_mae": 15.7,
+  "diameter_mae_um": 0.1892,
+  "count_mae": 16.3,
   "count_pct_diff": 4.0,
-  "n_images": 10,
-  "best_conf_threshold": 0.15,
+  "student_mean_diam_um": 1.274,
+  "teacher_mean_diam_um": 1.172,
+  "best_conf_threshold": 0.25,
   "max_det": 1000,
-  "student_total": 4635,
-  "teacher_total": 4329,
-  "epochs_run": 99
+  "retina_masks": true,
+  "epochs_run": 164
 }
