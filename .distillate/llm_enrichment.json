@@ -1,0 +1,19 @@
+{
+  "fingerprint": "303aa275e58c6dd9",
+  "enrichment": {
+    "project": {
+      "key_breakthrough": "Bubble count error dropped from 100% to 4% by fixing max_det=300 and conf threshold sweeping across 268 warm-started epochs.",
+      "lessons_learned": [
+        "max_det=300 (YOLO default) is a hard ceiling when teacher finds 433 bubbles/image — must raise to 1000.",
+        "Optimal conf threshold is 0.15 not 0.05: sweeping across values cut MAE from 115 to 15.7 at same checkpoint.",
+        "Warm-starting from prior checkpoints is highly effective — each run adds epochs without repeating pseudolabeling."
+      ],
+      "dead_ends": [
+        "val=True during training on MPS triggers a shape-mismatch crash in the YOLO11 assigner; use val=False.",
+        "conf=0.05 looked reasonable but caused 3x worse MAE than conf=0.15 on the same trained model."
+      ],
+      "trajectory": "Started at MAE=432 (0 detections). Fixed max_det + 169 epochs -> MAE=31. Further 99 epochs + conf sweep -> MAE=15.7 (4%), below the 5% target."
+    },
+    "runs": {}
+  }
+}

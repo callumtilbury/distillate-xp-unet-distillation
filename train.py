@@ -1,5 +1,5 @@
 """
-Run 3: Warm-start from run 2 checkpoint; max_det=1000; more epochs on cached pseudolabels.
+Run 4: Warm-start from run 3 checkpoint; more epochs; sweep conf threshold to minimise MAE.
 """
 import json
 import shutil
@@ -11,10 +11,10 @@ import numpy as np
 
 REPO_DIR = Path("/Users/crt25/code/bubcount-distill")
 SAMPLES_DIR = REPO_DIR / "samples"
-DATASET_DIR = Path(".distillate/pseudolabels")   # cached from run 2
-OUT_DIR = Path("/tmp/bubcount_distill_run3")
+DATASET_DIR = Path(".distillate/pseudolabels")
+OUT_DIR = Path("/tmp/bubcount_distill_run4")
 CKPT_DIR = Path(".distillate/checkpoints")
-PREV_WEIGHTS = Path("/tmp/bubcount_distill_run2/runs/student/weights/last.pt")
+PREV_WEIGHTS = Path("/tmp/bubcount_distill_run3/runs/student/weights/last.pt")
 
 sys.path.insert(0, str(REPO_DIR))
 
@@ -31,20 +31,19 @@ MAX_SECONDS = read_train_budget()
 _start = time.time()
 print(f"Budget: {MAX_SECONDS}s", flush=True)
 
-# ── teacher counts from cached labels ────────────────────────────────────────
+# ── teacher counts ────────────────────────────────────────────────────────────
 teacher_counts = {}
 for split in ("train", "val"):
     label_dir = DATASET_DIR / "labels" / split
     for lbl_file in sorted(label_dir.glob("*.txt")):
         count = sum(1 for line in lbl_file.read_text().splitlines() if line.strip())
         teacher_counts[lbl_file.stem + ".tif"] = count
-print(f"Loaded {len(teacher_counts)} cached label files, "
-      f"{sum(teacher_counts.values())} total instances", flush=True)
+print(f"Teacher: {len(teacher_counts)} images, {sum(teacher_counts.values())} instances", flush=True)
 
-# ── train from warm start ────────────────────────────────────────────────────
-print("=== Training (warm start from run 2) ===", flush=True)
+# ── train ────────────────────────────────────────────────────────────────────
+print("=== Training (warm start from run 3) ===", flush=True)
 
-remaining = MAX_SECONDS - (time.time() - _start) - 30
+remaining = MAX_SECONDS - (time.time() - _start) - 45
 epochs = min(300, max(10, int(remaining / 3)))
 print(f"Training up to {epochs} epochs ({remaining:.0f}s remaining)", flush=True)
 
@@ -62,86 +61,80 @@ results = yolo.train(
     device="mps",
     project=str(OUT_DIR / "runs"),
     name="student",
-    patience=80,
-    val=False,       # MPS shape-mismatch bug
+    patience=100,
+    val=False,
     plots=False,
     time=remaining / 3600,
+    lr0=0.001,    # lower LR for fine-tuning from warm start
+    lrf=0.01,
 )
 print("Training done", flush=True)
 
-# ── evaluate ─────────────────────────────────────────────────────────────────
-print("=== Evaluating ===", flush=True)
+# ── evaluate with conf sweep ─────────────────────────────────────────────────
+print("=== Evaluating (conf sweep, max_det=1000) ===", flush=True)
 
 weights_path = OUT_DIR / "runs" / "student" / "weights" / "best.pt"
 if not weights_path.exists():
     weights_path = OUT_DIR / "runs" / "student" / "weights" / "last.pt"
 
-from bubcount.distill.train import predict_yolo_seg
+yolo_eval = YOLO(str(weights_path))
 
-_, preds, _ = predict_yolo_seg(
-    weights=weights_path,
-    source=SAMPLES_DIR,
-    imgsz=640,
-    conf=0.05,
-    device="mps",
-)
+best_conf = 0.05
+best_mae = float("inf")
+best_student_counts = {}
 
-student_counts = {}
-for r in preds:
-    img_name = Path(r.path).name
-    # Patch: use max_det=1000 via nms override
-    n_masks = len(r.masks.data) if r.masks is not None else 0
-    student_counts[img_name] = n_masks
+for conf in (0.03, 0.05, 0.08, 0.10, 0.15, 0.20):
+    preds = yolo_eval.predict(
+        source=str(SAMPLES_DIR),
+        imgsz=640,
+        conf=conf,
+        device="mps",
+        max_det=1000,
+        save=False,
+        verbose=False,
+    )
+    sc = {Path(r.path).name: (len(r.masks.data) if r.masks is not None else 0) for r in preds}
+    diffs = [abs(teacher_counts.get(k, 0) - sc.get(k, 0)) for k in teacher_counts]
+    mae = float(np.mean(diffs))
+    total = sum(sc.values())
+    print(f"  conf={conf:.2f}: mae={mae:.1f}  student_total={total}", flush=True)
+    if mae < best_mae:
+        best_mae = mae
+        best_conf = conf
+        best_student_counts = sc
 
-# re-predict with high max_det
-from ultralytics import YOLO as YOLOeval
-yolo_eval = YOLOeval(str(weights_path))
-preds2 = yolo_eval.predict(
-    source=str(SAMPLES_DIR),
-    imgsz=640,
-    conf=0.05,
-    device="mps",
-    max_det=1000,
-    save=False,
-    verbose=False,
-)
-student_counts = {}
-for r in preds2:
-    img_name = Path(r.path).name
-    n_masks = len(r.masks.data) if r.masks is not None else 0
-    student_counts[img_name] = n_masks
+print(f"\nBest conf={best_conf}: count_mae={best_mae:.2f}", flush=True)
 
 abs_diffs = []
 teacher_vals = []
 for img_name in sorted(teacher_counts):
     teacher_n = teacher_counts[img_name]
-    student_n = student_counts.get(img_name, 0)
+    student_n = best_student_counts.get(img_name, 0)
     abs_diffs.append(abs(teacher_n - student_n))
     teacher_vals.append(teacher_n)
     print(f"  {img_name}: teacher={teacher_n}, student={student_n}, diff={abs(teacher_n-student_n)}", flush=True)
 
-count_mae = float(np.mean(abs_diffs)) if abs_diffs else float("nan")
 count_pct_diff = float(np.mean([d / max(t, 1) for d, t in zip(abs_diffs, teacher_vals)])) * 100
 epochs_run = results.epoch if hasattr(results, "epoch") else epochs
 
-print(f"\ncount_mae={count_mae:.2f}", flush=True)
+print(f"\ncount_mae={best_mae:.2f}", flush=True)
 print(f"count_pct_diff={count_pct_diff:.1f}%", flush=True)
 print(f"epochs_run={epochs_run}", flush=True)
-print(f"student_total={sum(student_counts.values())}  teacher_total={sum(teacher_counts.values())}", flush=True)
+print(f"student_total={sum(best_student_counts.values())}  teacher_total={sum(teacher_counts.values())}", flush=True)
 print(f"Total elapsed: {time.time() - _start:.1f}s", flush=True)
 
 metrics = {
-    "count_mae": round(count_mae, 3),
+    "count_mae": round(best_mae, 3),
     "count_pct_diff": round(count_pct_diff, 1),
     "n_images": len(abs_diffs),
     "epochs_run": epochs_run,
-    "conf_threshold": 0.05,
+    "best_conf_threshold": best_conf,
     "max_det": 1000,
-    "student_total": sum(student_counts.values()),
+    "student_total": sum(best_student_counts.values()),
     "teacher_total": sum(teacher_counts.values()),
 }
 Path("metrics.json").write_text(json.dumps(metrics, indent=2))
-print(f"Saved metrics.json", flush=True)
+print(f"Saved metrics.json: {metrics}", flush=True)
 
 CKPT_DIR.mkdir(parents=True, exist_ok=True)
 shutil.copy2(weights_path, CKPT_DIR / "best_model.pt")

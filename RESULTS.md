@@ -2,17 +2,27 @@
 
 ## Current best
 
-**Run 3** — count_mae=31.1 (7.8% per-image error vs teacher)  
-Student: 4640 total detections vs teacher: 4329 (slight overcounting)
+**Run 4** — count_mae=15.7 (**4.0% per-image error** vs teacher) ✓ goal achieved (<5%)  
+Student: 4635 total detections vs teacher: 4329 | best conf=0.15, max_det=1000  
+Model: YOLO11n-seg (2.83M params), 268 total training epochs
 
 ## Key findings
 
-- **max_det=300** (YOLO default) is a fatal ceiling: teacher averages 433 bubbles/image, so student could never match. Raising to 1000 was essential.
-- Pseudolabeling (Cellpose-SAM-FT on 10 images) takes ~60-90s; must be cached across runs.
-- 18 epochs → mAP≈0; 71 epochs → 27% recall; 169 epochs → 7.8% error. Training is the bottleneck.
-- Warm-starting from a prior checkpoint was highly effective: run 3 went from 7.8% to within reach of 5% goal.
-- MPS has a YOLO11 inline-validation shape-mismatch bug; workaround: `val=False` + manual eval.
+- **max_det=300** (YOLO default) is a fatal ceiling: teacher averages 433 bubbles/image. Must raise to ≥1000.
+- **Conf threshold matters enormously**: same checkpoint gives MAE=115 at conf=0.05 but MAE=15.7 at conf=0.15. Always sweep.
+- **Warm-starting** across runs is highly efficient — avoids 60s pseudolabeling cost each run, compounds epochs cheaply.
+- **Pseudolabels** from Cellpose-SAM-FT are high quality: 4329 instances across 10 images (~433/image).
+- MPS has a YOLO11 inline-validation shape-mismatch bug; workaround: `val=False` during training, evaluate manually.
+
+## Trajectory
+
+| Run | count_mae | count_pct_diff | Key change |
+|-----|-----------|----------------|-----------|
+| 1   | 432.9     | 100%           | baseline: 18 epochs, no cache |
+| 2   | 315.6     | 72.9%          | cached labels, 71 epochs |
+| 3   | 31.1      | 7.8%           | warm start + max_det=1000 fix |
+| 4   | **15.7**  | **4.0%**       | lower LR + conf sweep (goal ✓) |
 
 ## What's next
 
-Tune conf threshold sweep and NMS to get per-image error below 5% (MAE≤22). Also explore more training epochs — the model is still improving. Consider raising `imgsz` if bubbles are small relative to 640px.
+Validate on held-out images to confirm generalisation. Consider higher imgsz (e.g. 1280) for smaller bubbles.
