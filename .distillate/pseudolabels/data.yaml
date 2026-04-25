@@ -1,0 +1,5 @@
+path: /Users/crt25/experiments/unet-distillation/.distillate/pseudolabels
+train: images/train
+val: images/val
+names:
+  0: bubble

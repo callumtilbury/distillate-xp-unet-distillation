@@ -1,8 +1,10 @@
 {
-  "count_mae": 432.9,
-  "count_pct_diff": 100.0,
+  "count_mae": 31.1,
+  "count_pct_diff": 7.8,
   "n_images": 10,
-  "train_images": 8,
-  "val_images": 2,
-  "epochs_run": 18
+  "epochs_run": 169,
+  "conf_threshold": 0.05,
+  "max_det": 1000,
+  "student_total": 4640,
+  "teacher_total": 4329
 }
